@@ -1,14 +1,13 @@
 import sys
 import sqlite3
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtSql
 from PyQt5.QtWidgets import QMessageBox
-
 
 
 class Customer(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.service_dialog = ServiceDialog(customer_id, self.connection)
+        self.customer_id = None
         self.create_database()
         self.initUI()
 
@@ -53,7 +52,7 @@ class Customer(QtWidgets.QWidget):
         self.customer_table.setHorizontalHeaderLabels(['ID', 'نام', 'شماره موبایل', 'نوع خودرو'])
         self.customer_table.cellClicked.connect(self.populate_form)
         self.customer_table.cellDoubleClicked.connect(self.open_service_form)  # Update here
-        #self.customer_table.cellDoubleClicked.connect(self.open_customer_profile)
+        # self.customer_table.cellDoubleClicked.connect(self.open_customer_profile)
 
         layout.addWidget(self.customer_table)
         self.setLayout(layout)
@@ -86,8 +85,8 @@ class Customer(QtWidgets.QWidget):
         self.connection.commit()
 
     def open_service_form(self, row, column):
-        print(f"Cell double clicked at row {row}, column {column}")
         customer_id = self.customer_table.item(row, 0).text()
+        self.service_dialog = ServiceDialog(customer_id, self.connection)
         self.service_dialog.exec_()
 
     def save_customer(self):
@@ -167,21 +166,6 @@ class Customer(QtWidgets.QWidget):
                 self.customer_table.setItem(self.customer_table.rowCount() - 1, column,
                                             QtWidgets.QTableWidgetItem(str(item)))
 
-        def populate_form(self, row, column):
-            self.name_input.setText(self.customer_table.item(row, 1).text())
-            self.phone_input.setText(self.customer_table.item(row, 2).text())
-            self.car_type_input.setText(self.customer_table.item(row, 3).text())
-
-        def clear_inputs(self):
-            self.name_input.clear()
-            self.phone_input.clear()
-            self.car_type_input.clear()
-
-        def open_service_form(self, row, column):
-            customer_id = self.customer_table.item(row, 0).text()
-            self.service_dialog = ServiceDialog(customer_id, self.connection)
-            self.service_dialog.exec_()
-
     def populate_form(self, row, column):
         self.name_input.setText(self.customer_table.item(row, 1).text())
         self.phone_input.setText(self.customer_table.item(row, 2).text())
@@ -196,6 +180,7 @@ class Customer(QtWidgets.QWidget):
 class ServiceDialog(QtWidgets.QDialog):
     def __init__(self, customer_id, connection):
         super().__init__()
+        self.service_table = QtWidgets.QTableWidget(self)
         self.customer_id = customer_id
         self.connection = connection
         self.cursor = self.connection.cursor()
@@ -235,10 +220,9 @@ class ServiceDialog(QtWidgets.QDialog):
         self.delete_service_button.clicked.connect(self.delete_service)
         layout.addWidget(self.delete_service_button)
         # ایجاد جدول
-        self.service_table = QtWidgets.QTableWidget(self)
-        self.service_table.setColumnCount(5)  # تعداد ستون‌ها
+        self.service_table.setColumnCount(6)  # تعداد ستون‌ها
         self.service_table.setHorizontalHeaderLabels(
-            ['تاریخ مراجعه', 'نوع روغن', 'کیلومتر فعلی', 'هزینه', 'توضیحات'])
+            ['شناسه', 'تاریخ مراجعه', 'نوع روغن', 'کیلومتر فعلی', 'هزینه', 'توضیحات'])
         layout.addWidget(self.service_table)
         self.setLayout(layout)
         self.load_services()
@@ -255,36 +239,141 @@ class ServiceDialog(QtWidgets.QDialog):
                 "INSERT INTO services (customer_id, visit_date, oil_type, current_km, cost, description) VALUES (?, ?, ?, ?, ?, ?)",
                 (self.customer_id, visit_date, oil_type, current_km, cost, description))
             self.connection.commit()
-            self.close()
+            self.load_services()
         except Exception as e:
             print("Error occurred during saving service:", e)
 
     def load_services(self):
         # بارگذاری خدمات از دیتابیس
-        self.service_table.setRowCount(0)  # پاک کردن جدول قبل از بارگذاری جدید
-        query = QtSql.QSqlQuery("SELECT visit_date, oil_type, current_km, cost, description FROM services")
-        while query.next():
-            row_position = self.service_table.rowCount()
-            self.service_table.insertRow(row_position)
-            for column in range(5):
-                self.service_table.setItem(row_position, column, QtWidgets.QTableWidgetItem(query.value(column)))
+
+        self.cursor.execute("SELECT id,  visit_date, oil_type, current_km, cost, description FROM services")
+        rows = self.cursor.fetchall()
+
+        self.service_table.setRowCount(len(rows))  # تعداد ردیف‌ها را مشخص می‌کنیم
+        for row_index, row_data in enumerate(rows):
+            for column_index, data in enumerate(row_data):
+                self.service_table.setItem(row_index, column_index, QtWidgets.QTableWidgetItem(str(data)))
+
+    def closeEvent(self, event):
+        self.connection.close()  # بستن ارتباط با پایگاه داده هنگام بسته شدن فرم
 
     def delete_service(self):
-        # تابع برای حذف خدمت انتخاب‌شده
         selected_row = self.service_table.currentRow()
-        if selected_row >= 0:  # اطمینان از انتخاب یک ردیف
-            service_id = self.service_table.item(selected_row,
-                                                 0).text()  # فرض بر این است که ID خدمت در ستون اول است
+        if selected_row >= 0:
+            service_id = self.service_table.item(selected_row, 0).text()
+            reply = QMessageBox.question(self, 'تأیید حذف', 'آیا مطمئن هستید که می‌خواهید حذف کنید؟',
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.cursor.execute("DELETE FROM services WHERE id=?", (service_id,))
+                self.connection.commit()
+                self.load_services()
+
+
+"""class ServiceDialog(QtWidgets.QDialog):
+    def __init__(self, customer_id, connection):
+        super().__init__()
+        self.customer_id = customer_id
+        self.connection = connection
+        self.cursor = self.connection.cursor()
+        self.init_ui()
+    def init_ui(self):
+        self.setWindowTitle("سرویس خودرو")
+        self.setGeometry(300, 300, 400, 200)
+
+        layout = QtWidgets.QVBoxLayout()
+
+        # Input fields
+        self.visit_date_input = QtWidgets.QLineEdit(self)
+        self.visit_date_input.setPlaceholderText("تاریخ مراجعه (YYYY-MM-DD)")
+        layout.addWidget(self.visit_date_input)
+
+        self.oil_type_input = QtWidgets.QLineEdit(self)
+        self.oil_type_input.setPlaceholderText("نوع روغن")
+        layout.addWidget(self.oil_type_input)
+
+        self.current_km_input = QtWidgets.QLineEdit(self)
+        self.current_km_input.setPlaceholderText("کیلومتر فعلی")
+        layout.addWidget(self.current_km_input)
+
+        self.cost_input = QtWidgets.QLineEdit(self)
+        self.cost_input.setPlaceholderText("هزینه")
+        layout.addWidget(self.cost_input)
+
+        self.description_input = QtWidgets.QTextEdit(self)
+        self.description_input.setPlaceholderText("توضیحات")
+        layout.addWidget(self.description_input)
+
+        # Save service button
+        self.save_service_button.clicked.connect(self.save_service)
+        layout.addWidget(self.save_service_button)
+
+        # Setup the service table
+        self.service_table = QtWidgets.QTableWidget(self)
+        self.service_table.setColumnCount(5)
+        self.service_table.setHorizontalHeaderLabels(
+            ["ID", "تاریخ مراجعه", "نوع روغن", "کیلومتر فعلی", "هزینه"])
+        layout.addWidget(self.service_table)
+
+        # Load existing services for the customer
+        self.load_services()
+
+        self.setLayout(layout)
+    def load_services(self):
+            self.cursor.execute("SELECT visit_date, oil_type, current_km, cost, description FROM services")
+            rows = self.cursor.fetchall()
+
+            self.service_table.setRowCount(len(rows))  # تعداد ردیف‌ها را مشخص می‌کنیم  
+            for row_index, row_data in enumerate(rows):
+                for column_index, data in enumerate(row_data):
+                    self.service_table.setItem(row_index, column_index, QtWidgets.QTableWidgetItem(str(data)))
+
+    def closeEvent(self, event):
+            self.connection.close()  # بستن ارتباط با پایگاه داده هنگام بسته شدن فرم  
+    def save_service(self):
+        visit_date = self.visit_date_input.text().strip()
+        oil_type = self.oil_type_input.text().strip()
+        current_km = self.current_km_input.text().strip()
+        cost = self.cost_input.text().strip()
+        description = self.description_input.toPlainText().strip()
+
+        if visit_date and oil_type and current_km and cost:
+            query = QtSql.QSqlQuery()
+            query.prepare("INSERT INTO services (customer_id, visit_date, oil_type, current_km, cost, description) "
+                          "VALUES (?, ?, ?, ?, ?, ?)")
+            query.addBindValue(self.customer_id)
+            query.addBindValue(visit_date)
+            query.addBindValue(oil_type)
+            query.addBindValue(current_km)
+            query.addBindValue(cost)
+            query.addBindValue(description)
+
+            if query.exec_():
+                self.load_services()  # Refresh the service table
+                self.clear_inputs()  # Clear input fields
+            else:
+                print("Error saving service:", query.lastError().text())
+        else:
+            QtWidgets.QMessageBox.warning(self, "خطا", "لطفا تمامی فیلدها را پر کنید.")
+    def clear_inputs(self):
+        self.visit_date_input.clear()
+        self.oil_type_input.clear()
+        self.current_km_input.clear()
+        self.cost_input.clear()
+        self.description_input.clear()
+    def delete_service(self):
+        selected_row = self.service_table.currentRow()
+        if selected_row >= 0:
+            service_id = self.service_table.item(selected_row, 0).text()
             query = QtSql.QSqlQuery()
             query.prepare("DELETE FROM services WHERE id = ?")
             query.addBindValue(service_id)
+
             if query.exec_():
-                self.service_table.removeRow(selected_row)  # حذف ردیف از جدول
+                self.service_table.removeRow(selected_row)
             else:
                 print("Error deleting service:", query.lastError().text())
         else:
-            QtWidgets.QMessageBox.warning(self, "خطا", "لطفا یک خدمت را انتخاب کنید.")
-
+            QtWidgets.QMessageBox.warning(self, "خطا", "لطفا یک خدمت را انتخاب کنید.")"""
 app = QtWidgets.QApplication(sys.argv)
 window = Customer()
 window.show()
